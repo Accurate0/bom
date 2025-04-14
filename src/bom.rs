@@ -15,7 +15,7 @@ pub struct BOM {
 const FILE_TYPES_TO_MERGE: [&str; 4] = ["background", "topography", "locations", "range"];
 const RADAR_BACKGROUND_PATH: &str = "/anon/gen/radar_transparencies";
 const RADAR_DATA_PATH: &str = "/anon/gen/radar";
-const RADAR_CACHE_PATH: &str = "radar_cache";
+pub const RADAR_CACHE_PATH: &str = "radar_cache";
 
 const IMAGE_HOST: &str = "https://bom-images.anurag.sh";
 
