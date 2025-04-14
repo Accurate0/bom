@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum::{extract::State, http::StatusCode, routing::get};
 use sqlx::{postgres::PgPoolOptions, Connection};
-use std::{future::IntoFuture, ops::Deref, sync::Arc};
+use std::{future::IntoFuture, ops::Deref, sync::Arc, time::Duration};
 use tracing::Level;
 use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 use twilight_cache_inmemory::{DefaultCacheModels, InMemoryCacheBuilder, ResourceType};
@@ -21,6 +21,7 @@ use vesper::{
     prelude::{AutocompleteContext, DefaultCommandResult, Framework, SlashContext},
 };
 
+mod background;
 mod bom;
 
 #[derive(Clone)]
@@ -35,7 +36,7 @@ impl Deref for BotContext {
 }
 
 struct BotContextInner {
-    bom: bom::BOM,
+    bom: Arc<bom::BOM>,
 }
 
 async fn handle_event(event: Event, _http: Arc<HttpClient>) -> anyhow::Result<()> {
@@ -208,10 +209,10 @@ async fn main() -> anyhow::Result<()> {
 
     sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let bom = bom::BOM::new(bucket, pool).await?;
+    let bom = Arc::new(bom::BOM::new(bucket, pool).await?);
     bom.generate_radar_backgrounds().await?;
 
-    let context = BotContext(BotContextInner { bom }.into());
+    let context = BotContext(BotContextInner { bom: bom.clone() }.into());
 
     let config = ConfigBuilder::new(
         token.clone(),
@@ -234,6 +235,22 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
     tracing::info!("spawning axum");
     tokio::spawn(axum::serve(listener, app).into_future());
+
+    tracing::info!("spawning background thread");
+    let bom_cloned = bom.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = background::refresh_all_images(bom_cloned.clone()).await {
+                tracing::info!("error in refresh: {e}");
+            }
+
+            if let Err(e) = background::cleanup_old_images(bom_cloned.clone()).await {
+                tracing::info!("error in cleanup: {e}");
+            }
+
+            tokio::time::sleep(Duration::from_secs(900)).await;
+        }
+    });
 
     let app_id = http.current_user_application().await?.model().await?.id;
 

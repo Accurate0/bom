@@ -56,6 +56,10 @@ impl BOM {
         &self.db
     }
 
+    pub fn bucket(&self) -> &s3::Bucket {
+        &self.bucket
+    }
+
     pub async fn generate_radar_backgrounds(&self) -> Result<(), BOMError> {
         let locations = sqlx::query!("SELECT * FROM locations")
             .fetch_all(&self.db)
@@ -147,7 +151,32 @@ impl BOM {
         }
     }
 
+    pub async fn fetch_all_images_for(&self, bom_id: &str) -> Result<(), BOMError> {
+        let mut ftp_client = Self::get_ftp_client_session().await?;
+        let radar_images = ftp_client
+            .nlst(Some(RADAR_DATA_PATH))
+            .await?
+            .into_iter()
+            .filter(|i| i.starts_with(&format!("{RADAR_DATA_PATH}/{bom_id}")))
+            .filter(|i| i.ends_with(".png"));
+
+        for file in radar_images {
+            self.get_or_fetch_image(&file, &mut ftp_client).await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn generate_radar_gif_for(&self, bom_id: &str) -> Result<String, BOMError> {
+        let now = chrono::offset::Utc::now().naive_utc();
+        let datetime = now.format("%Y%m%d%H%M").to_string();
+        let bucket_path = format!("external/{}.{datetime}.radar.gif", bom_id);
+
+        let existing_obj = self.bucket.head_object(&bucket_path).await;
+        if existing_obj.is_ok() {
+            return Ok(format!("{IMAGE_HOST}/{bucket_path}"));
+        }
+
         let mut ftp_client = Self::get_ftp_client_session().await?;
         let mut radar_images = ftp_client
             .nlst(Some(RADAR_DATA_PATH))
@@ -188,14 +217,10 @@ impl BOM {
         // ok?
         drop(gif_encoder);
 
-        let now = chrono::offset::Utc::now().naive_utc();
-        let datetime = now.format("%Y%m%d%H%M%S").to_string();
-
-        let path = format!("external/{}.{datetime}.radar.gif", bom_id);
         self.bucket
-            .put_object_with_content_type(&path, &final_gif, "image/gif")
+            .put_object_with_content_type(&bucket_path, &final_gif, "image/gif")
             .await?;
 
-        Ok(format!("{IMAGE_HOST}/{path}"))
+        Ok(format!("{IMAGE_HOST}/{bucket_path}"))
     }
 }

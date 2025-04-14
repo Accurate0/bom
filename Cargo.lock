@@ -332,6 +332,7 @@ dependencies = [
  "chrono",
  "image",
  "pretty_assertions",
+ "regex",
  "rstest",
  "rust-s3",
  "sqlx",
