@@ -1,0 +1,9 @@
+apiVersion: inf-k8s.net/v1
+kind: PostgresDatabase
+metadata:
+  name: bom-database
+  namespace: bom
+spec:
+  databaseName: bom
+  secretName: bom-database-secret
+  secretNamespace: bom
