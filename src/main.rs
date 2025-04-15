@@ -108,7 +108,6 @@ async fn handle_interaction_error(ctx: &mut SlashContext<BotContext>, error: Def
 }
 
 #[command]
-#[only_guilds]
 #[description = "get radar images from bom"]
 #[error_handler(handle_interaction_error)]
 async fn radar(
