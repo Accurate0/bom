@@ -281,8 +281,6 @@ async fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        cache.update(&event);
-
         if let Event::InteractionCreate(i) = event {
             let clone = Arc::clone(&framework);
             tokio::spawn(async move {
