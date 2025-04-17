@@ -115,15 +115,24 @@ async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
 
     // some satellite
     let location = "IDE00416";
+    let location_name = sqlx::query!(
+        "SELECT name FROM satellites WHERE bom_satellite_id = ($1)",
+        location
+    )
+    .fetch_one(ctx.data.bom.db())
+    .await?;
 
     let url = ctx.data.bom.generate_satellite_gif_for(location).await?;
 
     let now = chrono::offset::Utc::now().naive_utc();
-    let embed = EmbedBuilder::new().color(0x003366).timestamp(
-        Timestamp::from_secs(now.and_utc().timestamp())
-            .context("must have valid time")
-            .unwrap(),
-    );
+    let embed = EmbedBuilder::new()
+        .title(location_name.name)
+        .color(0x003366)
+        .timestamp(
+            Timestamp::from_secs(now.and_utc().timestamp())
+                .context("must have valid time")
+                .unwrap(),
+        );
 
     tracing::info!("using url: {url}");
     let image = ImageSource::url(url);
