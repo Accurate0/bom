@@ -334,14 +334,20 @@ impl BOM {
         Ok(())
     }
 
-    pub async fn generate_satellite_gif_for(&self, bom_id: &str) -> Result<String, BOMError> {
+    pub async fn generate_satellite_gif_for(
+        &self,
+        bom_id: &str,
+    ) -> Result<(String, Vec<u8>), BOMError> {
         let now = chrono::offset::Utc::now().naive_utc();
         let datetime = now.format("%Y%m%d%H%M").to_string();
         let bucket_path = format!("external/{}.{datetime}.satellite.gif", bom_id);
 
         let existing_obj = self.bucket.head_object(&bucket_path).await;
         if existing_obj.is_ok() {
-            return Ok(format!("{IMAGE_HOST}/{bucket_path}"));
+            return Ok((
+                format!("{IMAGE_HOST}/{bucket_path}"),
+                self.bucket().get_object(&bucket_path).await?.to_vec(),
+            ));
         }
 
         let mut ftp_client = Self::get_ftp_client_session().await?;
@@ -357,7 +363,7 @@ impl BOM {
 
         let mut final_gif = Vec::<u8>::new();
         let mut final_gif_cursor = std::io::Cursor::new(&mut final_gif);
-        let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 15);
+        let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 10);
         gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
 
         let mut images = Vec::new();
@@ -380,23 +386,27 @@ impl BOM {
 
         tracing::info!("final gif size: {}", final_gif.len());
 
-        // ok?
-
         self.bucket
             .put_object_with_content_type(&bucket_path, &final_gif, "image/gif")
             .await?;
 
-        Ok(format!("{IMAGE_HOST}/{bucket_path}"))
+        Ok((format!("{IMAGE_HOST}/{bucket_path}"), final_gif))
     }
 
-    pub async fn generate_radar_gif_for(&self, bom_id: &str) -> Result<String, BOMError> {
+    pub async fn generate_radar_gif_for(
+        &self,
+        bom_id: &str,
+    ) -> Result<(String, Vec<u8>), BOMError> {
         let now = chrono::offset::Utc::now().naive_utc();
         let datetime = now.format("%Y%m%d%H%M").to_string();
         let bucket_path = format!("external/{}.{datetime}.radar.gif", bom_id);
 
         let existing_obj = self.bucket.head_object(&bucket_path).await;
         if existing_obj.is_ok() {
-            return Ok(format!("{IMAGE_HOST}/{bucket_path}"));
+            return Ok((
+                format!("{IMAGE_HOST}/{bucket_path}"),
+                self.bucket().get_object(&bucket_path).await?.to_vec(),
+            ));
         }
 
         let mut ftp_client = Self::get_ftp_client_session().await?;
@@ -445,6 +455,6 @@ impl BOM {
             .put_object_with_content_type(&bucket_path, &final_gif, "image/gif")
             .await?;
 
-        Ok(format!("{IMAGE_HOST}/{bucket_path}"))
+        Ok((format!("{IMAGE_HOST}/{bucket_path}"), final_gif))
     }
 }

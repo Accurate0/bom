@@ -14,7 +14,7 @@ use twilight_model::{
         command::{CommandOptionChoice, CommandOptionChoiceValue},
         interaction::InteractionContextType,
     },
-    http::interaction::InteractionResponseData,
+    http::{attachment::Attachment, interaction::InteractionResponseData},
     oauth::ApplicationIntegrationType,
     util::Timestamp,
 };
@@ -129,7 +129,7 @@ async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
     .fetch_one(ctx.data.bom.db())
     .await?;
 
-    let url = ctx.data.bom.generate_satellite_gif_for(location).await?;
+    let (url, bytes) = ctx.data.bom.generate_satellite_gif_for(location).await?;
 
     let now = chrono::offset::Utc::now().naive_utc();
     let embed = EmbedBuilder::new()
@@ -142,7 +142,8 @@ async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
         );
 
     tracing::info!("using url: {url}");
-    let image = ImageSource::url(url);
+
+    let image = ImageSource::attachment("url.gif");
 
     let embed = match image {
         Ok(image) => embed.image(image),
@@ -153,9 +154,11 @@ async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
     }
     .build();
 
+    let attachment = Attachment::from_bytes("url.gif".to_owned(), bytes, 1);
     ctx.interaction_client
         .update_response(&ctx.interaction.token)
         .embeds(Some(&[embed]))
+        .attachments(&[attachment])
         .await?;
 
     Ok(())
@@ -181,7 +184,7 @@ async fn radar(
     .fetch_one(ctx.data.bom.db())
     .await?;
 
-    let url = ctx.data.bom.generate_radar_gif_for(&location).await?;
+    let (url, bytes) = ctx.data.bom.generate_radar_gif_for(&location).await?;
 
     let now = chrono::offset::Utc::now().naive_utc();
     let embed = EmbedBuilder::new()
@@ -193,7 +196,9 @@ async fn radar(
                 .unwrap(),
         );
 
-    let image = ImageSource::url(url);
+    tracing::info!("using url: {url}");
+
+    let image = ImageSource::attachment("url.gif");
 
     let embed = match image {
         Ok(image) => embed.image(image),
@@ -204,8 +209,10 @@ async fn radar(
     }
     .build();
 
+    let attachment = Attachment::from_bytes("url.gif".to_owned(), bytes, 1);
     ctx.interaction_client
         .update_response(&ctx.interaction.token)
+        .attachments(&[attachment])
         .embeds(Some(&[embed]))
         .await?;
 
