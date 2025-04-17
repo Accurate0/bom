@@ -129,7 +129,7 @@ async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
     .fetch_one(ctx.data.bom.db())
     .await?;
 
-    let (url, bytes) = ctx.data.bom.generate_satellite_gif_for(location).await?;
+    let (url, bytes) = ctx.data.bom.get_latest_satellite_gif_for(location).await?;
 
     let now = chrono::offset::Utc::now().naive_utc();
     let embed = EmbedBuilder::new()

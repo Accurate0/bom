@@ -201,7 +201,7 @@ impl BOM {
     }
 
     fn compress_jpg(img: DynamicImage) -> Result<Vec<u8>, BOMError> {
-        let img = img.resize(500, 500, imageops::FilterType::Gaussian);
+        let img = img.resize(550, 550, imageops::FilterType::Nearest);
 
         let (width, height) = img.dimensions();
         let format = turbojpeg::PixelFormat::RGB;
@@ -334,13 +334,23 @@ impl BOM {
         Ok(())
     }
 
+    pub async fn get_latest_satellite_gif_for(
+        &self,
+        bom_id: &str,
+    ) -> Result<(String, Vec<u8>), BOMError> {
+        let bucket_path = format!("external/{}.latest.satellite.gif", bom_id);
+
+        return Ok((
+            format!("{IMAGE_HOST}/{bucket_path}"),
+            self.bucket().get_object(&bucket_path).await?.to_vec(),
+        ));
+    }
+
     pub async fn generate_satellite_gif_for(
         &self,
         bom_id: &str,
     ) -> Result<(String, Vec<u8>), BOMError> {
-        let now = chrono::offset::Utc::now().naive_utc();
-        let datetime = now.format("%Y%m%d%H%M").to_string();
-        let bucket_path = format!("external/{}.{datetime}.satellite.gif", bom_id);
+        let bucket_path = format!("external/{}.latest.satellite.gif", bom_id);
 
         let existing_obj = self.bucket.head_object(&bucket_path).await;
         if existing_obj.is_ok() {
@@ -363,7 +373,7 @@ impl BOM {
 
         let mut final_gif = Vec::<u8>::new();
         let mut final_gif_cursor = std::io::Cursor::new(&mut final_gif);
-        let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 10);
+        let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 1);
         gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
 
         let mut images = Vec::new();

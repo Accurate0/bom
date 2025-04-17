@@ -29,6 +29,14 @@ pub async fn refresh_all_images(bom: Arc<bom::BOM>) -> Result<(), bom::BOMError>
         {
             tracing::error!("error in satellite fetch: {e}");
         };
+
+        tracing::info!("updating latest satellite gif for {}", location.name);
+        if let Err(e) = bom
+            .generate_satellite_gif_for(&location.bom_satellite_id)
+            .await
+        {
+            tracing::error!("error encoding gif: {e}");
+        }
     }
 
     Ok(())
