@@ -108,6 +108,44 @@ async fn handle_interaction_error(ctx: &mut SlashContext<BotContext>, error: Def
 }
 
 #[command]
+#[description = "get satellite images from bom"]
+#[error_handler(handle_interaction_error)]
+async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
+    ctx.defer(false).await?;
+
+    // some satellite
+    let location = "IDE00416";
+
+    let url = ctx.data.bom.generate_satellite_gif_for(location).await?;
+
+    let now = chrono::offset::Utc::now().naive_utc();
+    let embed = EmbedBuilder::new().color(0x003366).timestamp(
+        Timestamp::from_secs(now.and_utc().timestamp())
+            .context("must have valid time")
+            .unwrap(),
+    );
+
+    tracing::info!("using url: {url}");
+    let image = ImageSource::url(url);
+
+    let embed = match image {
+        Ok(image) => embed.image(image),
+        Err(e) => {
+            tracing::error!("error with image url: {e}");
+            embed
+        }
+    }
+    .build();
+
+    ctx.interaction_client
+        .update_response(&ctx.interaction.token)
+        .embeds(Some(&[embed]))
+        .await?;
+
+    Ok(())
+}
+
+#[command]
 #[description = "get radar images from bom"]
 #[error_handler(handle_interaction_error)]
 async fn radar(
@@ -143,7 +181,10 @@ async fn radar(
 
     let embed = match image {
         Ok(image) => embed.image(image),
-        Err(_) => embed,
+        Err(e) => {
+            tracing::error!("error in radar embed {e}");
+            embed
+        }
     }
     .build();
 
@@ -237,8 +278,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("spawning background thread");
     let bom_cloned = bom.clone();
+
+    // dont look
     tokio::spawn(async move {
         loop {
+            let bom_cloned = bom_cloned.clone();
             if let Err(e) = background::refresh_all_images(bom_cloned.clone()).await {
                 tracing::info!("error in refresh: {e}");
             }
@@ -256,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
     let framework = Arc::new(
         Framework::builder(Arc::clone(&http), app_id, context)
             .command(radar)
+            .command(satellite)
             .build(),
     );
 
