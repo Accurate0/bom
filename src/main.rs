@@ -389,7 +389,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut updated_commands = Vec::with_capacity(global_commands.len());
     for global_command in global_commands {
-        let command = CommandBuilder::new(
+        let mut command = CommandBuilder::new(
             global_command.name,
             global_command.description,
             global_command.kind,
@@ -402,10 +402,13 @@ async fn main() -> anyhow::Result<()> {
             InteractionContextType::BotDm,
             InteractionContextType::PrivateChannel,
             InteractionContextType::Guild,
-        ])
-        .build();
+        ]);
 
-        updated_commands.push(command);
+        for option in global_command.options {
+            command = command.option(option);
+        }
+
+        updated_commands.push(command.build());
     }
 
     tracing::info!("updating commands: {}", updated_commands.len());
