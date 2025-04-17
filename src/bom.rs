@@ -201,7 +201,7 @@ impl BOM {
     }
 
     fn compress_jpg(img: DynamicImage) -> Result<Vec<u8>, BOMError> {
-        let img = img.resize(300, 300, imageops::FilterType::Gaussian);
+        let img = img.resize(500, 500, imageops::FilterType::Gaussian);
 
         let (width, height) = img.dimensions();
         let format = turbojpeg::PixelFormat::RGB;
