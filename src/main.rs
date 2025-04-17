@@ -10,11 +10,18 @@ use twilight_gateway::{
 };
 use twilight_http::Client as HttpClient;
 use twilight_model::{
-    application::command::{CommandOptionChoice, CommandOptionChoiceValue},
+    application::{
+        command::{CommandOptionChoice, CommandOptionChoiceValue},
+        interaction::InteractionContextType,
+    },
     http::interaction::InteractionResponseData,
+    oauth::ApplicationIntegrationType,
     util::Timestamp,
 };
-use twilight_util::builder::embed::{EmbedBuilder, ImageSource};
+use twilight_util::builder::{
+    command::CommandBuilder,
+    embed::{EmbedBuilder, ImageSource},
+};
 use vesper::{
     framework::DefaultError,
     macros::{autocomplete, command, error_handler},
@@ -314,6 +321,34 @@ async fn main() -> anyhow::Result<()> {
     );
 
     framework.register_global_commands().await?;
+    let interaction_client = http.interaction(app_id);
+    let global_commands = interaction_client.global_commands().await?.model().await?;
+
+    let mut updated_commands = Vec::with_capacity(global_commands.len());
+    for global_command in global_commands {
+        let command = CommandBuilder::new(
+            global_command.name,
+            global_command.description,
+            global_command.kind,
+        )
+        .integration_types(vec![
+            ApplicationIntegrationType::GuildInstall,
+            ApplicationIntegrationType::UserInstall,
+        ])
+        .contexts(vec![
+            InteractionContextType::BotDm,
+            InteractionContextType::PrivateChannel,
+            InteractionContextType::Guild,
+        ])
+        .build();
+
+        updated_commands.push(command);
+    }
+
+    tracing::info!("updating commands: {}", updated_commands.len());
+    interaction_client
+        .set_global_commands(&updated_commands)
+        .await?;
 
     tracing::info!("starting event loop");
     while let Some(event) = shard.next_event(EventTypeFlags::all()).await {
