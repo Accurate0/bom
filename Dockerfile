@@ -4,7 +4,7 @@ ARG BINARY_NAME
 FROM rust:${RUST_VERSION}-slim-bookworm AS builder
 ARG BINARY_NAME
 
-RUN apt-get update -y && apt-get install -y pkg-config libssl-dev
+RUN apt-get update -y && apt-get install -y pkg-config libssl-dev cmake
 
 WORKDIR /app/${BINARY_NAME}-build
 
