@@ -386,15 +386,6 @@ impl BOM {
         bom_id: &str,
     ) -> Result<(String, Vec<u8>), BOMError> {
         let bucket_path = format!("external/{}.latest.satellite.gif", bom_id);
-
-        let existing_obj = self.bucket.head_object(&bucket_path).await;
-        if existing_obj.is_ok() {
-            return Ok((
-                format!("{IMAGE_HOST}/{bucket_path}"),
-                self.bucket().get_object(&bucket_path).await?.to_vec(),
-            ));
-        }
-
         let mut ftp_client = Self::get_ftp_client_session().await?;
         let mut satellite_images = ftp_client
             .nlst(Some(SATELLITE_DATA_PATH))
