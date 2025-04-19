@@ -184,7 +184,7 @@ impl BOM {
                 .with_guessed_format()?
                 .decode()?;
 
-            let bytes = Self::compress_jpg(img)?;
+            let bytes = Self::compress_jpg(img).await?;
 
             self.bucket
                 .put_object_with_content_type(cache_path, &bytes, mime)
@@ -206,23 +206,27 @@ impl BOM {
         }
     }
 
-    fn compress_jpg(img: DynamicImage) -> Result<Vec<u8>, BOMError> {
-        let img = img.resize(550, 550, imageops::FilterType::Nearest);
+    async fn compress_jpg(img: DynamicImage) -> Result<Vec<u8>, BOMError> {
+        let rt = tokio::runtime::Handle::current();
+        rt.spawn_blocking(move || {
+            let img = img.resize(550, 550, imageops::FilterType::Nearest);
 
-        let (width, height) = img.dimensions();
-        let format = turbojpeg::PixelFormat::RGB;
-        let image = turbojpeg::Image {
-            pixels: img.as_bytes(),
-            width: width as usize,
-            pitch: format.size() * width as usize,
-            height: height as usize,
-            format,
-        };
+            let (width, height) = img.dimensions();
+            let format = turbojpeg::PixelFormat::RGB;
+            let image = turbojpeg::Image {
+                pixels: img.as_bytes(),
+                width: width as usize,
+                pitch: format.size() * width as usize,
+                height: height as usize,
+                format,
+            };
 
-        let mut compressor = turbojpeg::Compressor::new()?;
-        compressor.set_quality(75)?;
-        compressor.set_subsamp(turbojpeg::Subsamp::Sub2x1)?;
-        compressor.compress_to_vec(image).map_err(|e| e.into())
+            let mut compressor = turbojpeg::Compressor::new()?;
+            compressor.set_quality(75)?;
+            compressor.set_subsamp(turbojpeg::Subsamp::Sub2x1)?;
+            compressor.compress_to_vec(image).map_err(|e| e.into())
+        })
+        .await?
     }
 
     async fn fetch_compressed_and_resized(
@@ -251,7 +255,7 @@ impl BOM {
                 .with_guessed_format()?
                 .decode()?;
 
-            let bytes = Self::compress_jpg(img)?;
+            let bytes = Self::compress_jpg(img).await?;
 
             self.bucket
                 .put_object_with_content_type(cache_path, &bytes, mime)
