@@ -80,10 +80,11 @@ pub async fn cleanup_old_images(bom: Arc<bom::BOM>) -> Result<(), anyhow::Error>
         let datetime = NaiveDateTime::parse_from_str(datetime, "%Y%m%d%H%M")?.and_utc();
         let difference_in_hours = (now - datetime).num_hours();
         if difference_in_hours > 24 {
+            tracing::info!("item: {basename} matched {datetime} {difference_in_hours} [DELETED]");
             bucket.delete_object(&object.key).await?;
+        } else {
+            tracing::info!("item: {basename} matched {datetime} {difference_in_hours}");
         }
-
-        tracing::info!("item: {basename} matched {datetime} {difference_in_hours}");
     }
 
     let satellite_objects = bucket
@@ -109,10 +110,11 @@ pub async fn cleanup_old_images(bom: Arc<bom::BOM>) -> Result<(), anyhow::Error>
         let datetime = NaiveDateTime::parse_from_str(datetime, "%Y%m%d%H%M")?.and_utc();
         let difference_in_hours = (now - datetime).num_hours();
         if difference_in_hours > 24 {
+            tracing::info!("item: {basename} matched {datetime} {difference_in_hours} [DELETED]");
             bucket.delete_object(&object.key).await?;
+        } else {
+            tracing::info!("item: {basename} matched {datetime} {difference_in_hours}");
         }
-
-        tracing::info!("item: {basename} matched {datetime} {difference_in_hours}");
     }
 
     Ok(())
