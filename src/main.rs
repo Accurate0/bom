@@ -318,7 +318,8 @@ async fn main() -> anyhow::Result<()> {
             endpoint: bucket_endpoint,
         },
         credentials,
-    )?;
+    )?
+    .with_path_style();
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
