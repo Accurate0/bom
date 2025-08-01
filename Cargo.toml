@@ -31,5 +31,5 @@ turbojpeg = { git = "https://github.com/honzasp/rust-turbojpeg.git", rev = "b85e
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
-rstest = "0.25.0"
+rstest = "0.26.0"
 
