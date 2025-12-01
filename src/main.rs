@@ -1,6 +1,9 @@
+use crate::willyweather::WillyWeatherAPI;
 use anyhow::Context;
 use axum::{extract::State, http::StatusCode, routing::get};
-use sqlx::{postgres::PgPoolOptions, Connection};
+use chrono::{DateTime, Utc};
+use phf::phf_map;
+use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, ops::Deref, sync::Arc, time::Duration};
 use tracing::Level;
 use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
@@ -20,7 +23,7 @@ use twilight_model::{
 };
 use twilight_util::builder::{
     command::CommandBuilder,
-    embed::{EmbedBuilder, ImageSource},
+    embed::{EmbedBuilder, EmbedFieldBuilder, EmbedFooterBuilder, ImageSource},
 };
 use vesper::{
     framework::DefaultError,
@@ -30,6 +33,8 @@ use vesper::{
 
 mod background;
 mod bom;
+mod types;
+mod willyweather;
 
 #[derive(Clone)]
 struct BotContext(Arc<BotContextInner>);
@@ -44,6 +49,7 @@ impl Deref for BotContext {
 
 struct BotContextInner {
     bom: Arc<bom::BOM>,
+    willyweather: WillyWeatherAPI,
 }
 
 async fn handle_event(event: Event, _http: Arc<HttpClient>) -> anyhow::Result<()> {
@@ -59,6 +65,25 @@ async fn handle_event(event: Event, _http: Arc<HttpClient>) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+#[autocomplete]
+async fn autocomplete_location_forecast(
+    _ctx: AutocompleteContext<BotContext>,
+) -> Option<InteractionResponseData> {
+    let choices = WillyWeatherAPI::get_locations()
+        .into_iter()
+        .map(|item| CommandOptionChoice {
+            name: item.0,
+            name_localizations: None,
+            value: CommandOptionChoiceValue::String(item.1),
+        })
+        .collect();
+
+    Some(InteractionResponseData {
+        choices: Some(choices),
+        ..Default::default()
+    })
 }
 
 #[autocomplete]
@@ -274,18 +299,96 @@ async fn radar(
     Ok(())
 }
 
-async fn health(ctx: State<BotContext>) -> StatusCode {
-    let resp = ctx.bom.db().acquire().await;
+const PRECIS_TO_EMOJI: phf::Map<&'static str, &'static str> = phf_map! {
+    "fine" => "☀️",
+    "mostly-fine" => "🌤️",
+    "high-cloud" => "☁️",
+    "partly-cloudy" => "⛅",
+    "mostly-cloudy" => "🌥️",
+    "cloudy" => "☁️",
+    "overcast" => "🌫️",
+    "shower-or-two" => "🌦️",
+    "chance-shower-fine" => "🌧️",
+    "chance-shower-cloud" => "🌧️",
+    "drizzle" => "🌧️",
+    "few-showers" => "🌦️",
+    "showers-rain" => "🌧️",
+    "heavy-showers-rain" => "🌧️",
+    "chance-thunderstorm-fine" => "⛈️",
+    "chance-thunderstorm-cloud" => "⛈️",
+    "chance-thunderstorm-showers" => "⛈️",
+    "thunderstorm" => "⛈️",
+    "chance-snow-fine" => "🌨️",
+    "chance-snow-cloud" => "🌨️",
+    "snow-and-rain" => "🌨️",
+    "light-snow" => "🌨️",
+    "snow" => "❄️",
+    "heavy-snow" => "🌨️",
+    "wind" => "💨",
+    "frost" => "🧊",
+    "fog" => "🌁",
+    "hail" => "🌨️",
+    "dust" => "🌪️",
+};
 
-    if resp.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE;
+#[command]
+#[description = "get forecast information from bom"]
+#[error_handler(handle_interaction_error)]
+async fn forecast(
+    ctx: &mut SlashContext<BotContext>,
+    #[autocomplete(autocomplete_location_forecast)]
+    #[description = "pick a location"]
+    location: Option<String>,
+) -> DefaultCommandResult {
+    ctx.defer(false).await?;
+
+    // perth
+    let location = location.unwrap_or_else(|| WillyWeatherAPI::PERTH_ID.to_owned());
+
+    let forecast = ctx.data.willyweather.get_forecast(&location).await?;
+
+    let mut embed = EmbedBuilder::new()
+        .title(format!("🌡️ Forecast for {}", forecast.location.name))
+        .color(0x003366)
+        .footer(EmbedFooterBuilder::new(
+            "BOM charges $4,037.00 for this data",
+        ));
+
+    for days in forecast.forecasts.weather.days {
+        let entry = days.entries.first().context("must have entries")?;
+        let min = entry.min;
+        let max = entry.max;
+        let description = &entry.precis;
+        let datetime_with_timezone = &format!("{} +0800", entry.date_time);
+        let datetime = DateTime::parse_from_str(datetime_with_timezone, "%Y-%m-%d %H:%M:%S %z")?;
+        let emoji = PRECIS_TO_EMOJI.get(&entry.precis_code).map_or("", |e| e);
+
+        let formatted_date = if datetime.date_naive() == Utc::now().date_naive() {
+            "Today".to_owned()
+        } else {
+            datetime.format("%A %d/%m").to_string()
+        };
+        let temperature_details = format!("**Max:** {}°c, **Min:** {}°c", max, min);
+
+        embed = embed.field(
+            EmbedFieldBuilder::new(
+                formatted_date,
+                format!("{} — {} {}", temperature_details, emoji, description),
+            )
+            .build(),
+        )
     }
 
-    let resp = resp.unwrap().ping().await;
-    match resp {
-        Ok(_) => StatusCode::NO_CONTENT,
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
-    }
+    ctx.interaction_client
+        .update_response(&ctx.interaction.token)
+        .embeds(Some(&[embed.build()]))
+        .await?;
+
+    Ok(())
+}
+
+async fn health(_ctx: State<BotContext>) -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 #[tokio::main]
@@ -302,6 +405,7 @@ async fn main() -> anyhow::Result<()> {
     let access_secret_key = std::env::var("BUCKET_ACCESS_SECRET_KEY")?;
     let bucket_name = std::env::var("BUCKET_NAME")?;
     let bucket_endpoint = std::env::var("BUCKET_ENDPOINT")?;
+    let willyweather_api_key = std::env::var("WILLYWEATHER_API_KEY")?;
 
     let credentials = s3::creds::Credentials::new(
         Some(&access_key_id),
@@ -328,10 +432,17 @@ async fn main() -> anyhow::Result<()> {
 
     sqlx::migrate!("./migrations").run(&pool).await?;
 
+    let willyweather = WillyWeatherAPI::new(willyweather_api_key);
     let bom = Arc::new(bom::BOM::new(bucket, pool).await?);
     bom.generate_radar_backgrounds().await?;
 
-    let context = BotContext(BotContextInner { bom: bom.clone() }.into());
+    let context = BotContext(
+        BotContextInner {
+            bom: bom.clone(),
+            willyweather,
+        }
+        .into(),
+    );
 
     let config = ConfigBuilder::new(
         token.clone(),
@@ -355,24 +466,25 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("spawning axum");
     tokio::spawn(axum::serve(listener, app).into_future());
 
-    tracing::info!("spawning background thread");
-    let bom_cloned = bom.clone();
-
     // dont look
-    tokio::spawn(async move {
-        loop {
-            let bom_cloned = bom_cloned.clone();
-            if let Err(e) = background::refresh_all_images(bom_cloned.clone()).await {
-                tracing::info!("error in refresh: {e}");
-            }
+    if !cfg!(debug_assertions) {
+        tracing::info!("spawning background thread");
+        let bom_cloned = bom.clone();
+        tokio::spawn(async move {
+            loop {
+                let bom_cloned = bom_cloned.clone();
+                if let Err(e) = background::refresh_all_images(bom_cloned.clone()).await {
+                    tracing::info!("error in refresh: {e}");
+                }
 
-            if let Err(e) = background::cleanup_old_images(bom_cloned.clone()).await {
-                tracing::info!("error in cleanup: {e}");
-            }
+                if let Err(e) = background::cleanup_old_images(bom_cloned.clone()).await {
+                    tracing::info!("error in cleanup: {e}");
+                }
 
-            tokio::time::sleep(Duration::from_secs(900)).await;
-        }
-    });
+                tokio::time::sleep(Duration::from_secs(900)).await;
+            }
+        });
+    }
 
     let app_id = http.current_user_application().await?.model().await?.id;
 
@@ -381,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
             .command(radar)
             .command(satellite)
             .command(timelapse)
+            .command(forecast)
             .build(),
     );
 
