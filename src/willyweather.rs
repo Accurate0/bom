@@ -38,6 +38,7 @@ impl WillyWeatherAPI {
     pub async fn get_forecast(
         &self,
         id: &str,
+        days: &i64,
     ) -> Result<WillyWeatherForecast, WillyWeatherAPIError> {
         let url = Self::FORECAST_API_TEMPLATE
             .replace("{API_KEY}", &self.api_key)
@@ -46,7 +47,7 @@ impl WillyWeatherAPI {
         let response = self
             .http
             .get(url)
-            .query(&[("forecasts", "weather"), ("days", "7")])
+            .query(&[("forecasts", "weather,uv"), ("days", &days.to_string())])
             .send()
             .await?
             .error_for_status()?

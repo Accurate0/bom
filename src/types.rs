@@ -25,26 +25,27 @@ pub struct Location {
 #[serde(rename_all = "camelCase")]
 pub struct Forecasts {
     pub weather: Weather,
+    pub uv: Uv,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Weather {
-    pub days: Vec<Day>,
+    pub days: Vec<WeatherDay>,
     pub units: Units,
     pub issue_date_time: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Day {
+pub struct WeatherDay {
     pub date_time: String,
-    pub entries: Vec<Entry>,
+    pub entries: Vec<WeatherEntry>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Entry {
+pub struct WeatherEntry {
     pub date_time: String,
     pub precis_code: String,
     pub precis: String,
@@ -58,4 +59,36 @@ pub struct Entry {
 #[serde(rename_all = "camelCase")]
 pub struct Units {
     pub temperature: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Uv {
+    pub days: Vec<UvDay>,
+    pub issue_date_time: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UvDay {
+    pub date_time: String,
+    pub entries: Vec<UvEntry>,
+    pub alert: Alert,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UvEntry {
+    pub date_time: String,
+    pub index: f64,
+    pub scale: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub max_index: f64,
+    pub scale: String,
+    pub start_date_time: String,
+    pub end_date_time: String,
 }

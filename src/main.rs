@@ -339,13 +339,15 @@ async fn forecast(
     #[autocomplete(autocomplete_location_forecast)]
     #[description = "pick a location"]
     location: Option<String>,
+    #[description = "number of days"] days: Option<i64>,
 ) -> DefaultCommandResult {
     ctx.defer(false).await?;
 
     // perth
     let location = location.unwrap_or_else(|| WillyWeatherAPI::PERTH_ID.to_owned());
+    let days = days.unwrap_or(5);
 
-    let forecast = ctx.data.willyweather.get_forecast(&location).await?;
+    let forecast = ctx.data.willyweather.get_forecast(&location, &days).await?;
 
     let mut embed = EmbedBuilder::new()
         .title(format!("🌡️ Forecast for {}", forecast.location.name))
@@ -354,7 +356,7 @@ async fn forecast(
             "BOM charges $4,037.00 for this data",
         ));
 
-    for days in forecast.forecasts.weather.days {
+    for (i, days) in forecast.forecasts.weather.days.into_iter().enumerate() {
         let entry = days.entries.first().context("must have entries")?;
         let min = entry.min;
         let max = entry.max;
@@ -362,13 +364,22 @@ async fn forecast(
         let datetime_with_timezone = &format!("{} +0800", entry.date_time);
         let datetime = DateTime::parse_from_str(datetime_with_timezone, "%Y-%m-%d %H:%M:%S %z")?;
         let emoji = PRECIS_TO_EMOJI.get(&entry.precis_code).map_or("", |e| e);
+        let uv_level = forecast.forecasts.uv.days.get(i).map(|e| &e.alert);
 
         let formatted_date = if datetime.date_naive() == Utc::now().date_naive() {
             "Today".to_owned()
         } else {
             datetime.format("%A %d/%m").to_string()
         };
-        let temperature_details = format!("**Max:** {}°c, **Min:** {}°c", max, min);
+
+        let temperature_details = if let Some(uv_level) = uv_level {
+            format!(
+                "**Max:** {}°c, **Min:** {}°c, **UV:** {:.1}",
+                max, min, uv_level.max_index
+            )
+        } else {
+            format!("**Max:** {}°c, **Min:** {}°c", max, min)
+        };
 
         embed = embed.field(
             EmbedFieldBuilder::new(
