@@ -345,7 +345,7 @@ async fn forecast(
 
     // perth
     let location = location.unwrap_or_else(|| WillyWeatherAPI::PERTH_ID.to_owned());
-    let days = days.unwrap_or(5);
+    let days = days.unwrap_or(7);
 
     let forecast = ctx.data.willyweather.get_forecast(&location, &days).await?;
 
