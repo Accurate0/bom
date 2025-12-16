@@ -1,4 +1,47 @@
+use axum::response::{IntoResponse, Response};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct ForecastForDay {
+    pub date_time: String,
+    pub code: String,
+    pub description: String,
+    pub emoji: String,
+    pub min: i64,
+    pub max: i64,
+    pub uv: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ForecastEndpointResponse {
+    pub days: Vec<ForecastForDay>,
+}
+
+pub enum AppError {
+    Error(anyhow::Error),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        match self {
+            AppError::Error(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Something went wrong: {}", e),
+            )
+                .into_response(),
+        }
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self::Error(err.into())
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

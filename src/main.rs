@@ -1,8 +1,17 @@
-use crate::willyweather::WillyWeatherAPI;
+use crate::{
+    types::{AppError, ForecastEndpointResponse, ForecastForDay},
+    willyweather::WillyWeatherAPI,
+};
 use anyhow::Context;
-use axum::{extract::State, http::StatusCode, routing::get};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    routing::get,
+    Json,
+};
 use chrono::{DateTime, Utc};
 use phf::phf_map;
+use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, ops::Deref, sync::Arc, time::Duration};
 use tracing::Level;
@@ -402,6 +411,56 @@ async fn health(_ctx: State<BotContext>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+#[derive(Deserialize)]
+struct ForecastParams {
+    location: Option<String>,
+}
+
+async fn forecast_endpoint(
+    ctx: State<BotContext>,
+    params: Query<ForecastParams>,
+) -> Result<Json<ForecastEndpointResponse>, AppError> {
+    let location = params
+        .location
+        .clone()
+        .unwrap_or_else(|| WillyWeatherAPI::PERTH_ID.to_owned());
+
+    let forecast_resp = ctx.willyweather.get_forecast(&location, &7).await?;
+    let mut forecast_for_days = Vec::with_capacity(7);
+
+    for (i, days) in forecast_resp.forecasts.weather.days.into_iter().enumerate() {
+        let entry = days
+            .entries
+            .into_iter()
+            .next()
+            .context("must have entries")?;
+        let min = entry.min;
+        let max = entry.max;
+        let description = entry.precis;
+        let datetime_with_timezone = &format!("{} +0800", entry.date_time);
+        let datetime = DateTime::parse_from_str(datetime_with_timezone, "%Y-%m-%d %H:%M:%S %z")?;
+        let emoji = PRECIS_TO_EMOJI
+            .get(&entry.precis_code)
+            .map_or("", |e| e)
+            .to_string();
+        let uv_level = forecast_resp.forecasts.uv.days.get(i).map(|e| &e.alert);
+
+        forecast_for_days.push(ForecastForDay {
+            date_time: datetime.to_rfc3339(),
+            code: entry.precis_code,
+            emoji,
+            description,
+            min,
+            max,
+            uv: uv_level.map(|uv| uv.max_index),
+        });
+    }
+
+    Ok(Json(ForecastEndpointResponse {
+        days: forecast_for_days,
+    }))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -471,6 +530,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = axum::Router::new()
         .route("/health", get(health))
+        .route("/forecast", get(forecast_endpoint))
         .with_state(context.clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
