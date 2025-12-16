@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bom-api
+  namespace: bom
+spec:
+  selector:
+    app: bom
+  ports:
+    - name: api
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
