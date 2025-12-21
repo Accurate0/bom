@@ -31,7 +31,10 @@ impl WillyWeatherAPI {
     }
 
     pub fn get_locations() -> HashSet<(String, String)> {
-        HashSet::from_iter(vec![("Perth".to_owned(), Self::PERTH_ID.to_owned())])
+        HashSet::from_iter(vec![
+            ("Perth".to_owned(), Self::PERTH_ID.to_owned()),
+            ("Australind".to_owned(), "15864".to_owned()),
+        ])
     }
 
     #[instrument(skip(self))]
