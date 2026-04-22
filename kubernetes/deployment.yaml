@@ -15,11 +15,6 @@ spec:
       labels:
         app: bom
     spec:
-      tolerations:
-        - key: "group"
-          operator: "Equal"
-          value: "external"
-          effect: "NoSchedule"
       containers:
         - name: bom
           image: bom:latest
