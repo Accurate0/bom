@@ -19,11 +19,13 @@ jobs:
       use-rust-caching: true
 
   deploy:
-    needs: build
-    uses: Accurate0/workflows/.github/workflows/deploy-app-k8s.yaml@main
+    needs:
+      - build
+    uses: Accurate0/workflows/.github/workflows/deploy-app-k8s-v2.yaml@main
     with:
-      application-name: bom
+      service-name: bom
+      images: ghcr.io/accurate0/bom
+      manifests-path: projects/bom/manifests
+      tag: ${{ github.sha }}
     secrets:
-      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-      ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+      FORGEJO_TOKEN: ${{ secrets.FORGEJO_CI_IMAGE_UPDATER }}
