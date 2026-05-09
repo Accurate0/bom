@@ -27,6 +27,5 @@ jobs:
       images: ghcr.io/accurate0/bom
       manifests-path: projects/bom/manifests
       tag: ${{ github.sha }}
-      raiseAsPR: true
     secrets:
       FORGEJO_TOKEN: ${{ secrets.FORGEJO_CI_IMAGE_UPDATER }}
