@@ -513,25 +513,6 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let interaction_client = http.interaction(app_id);
-    match interaction_client.global_commands().await {
-        Ok(resp) => match resp.model().await {
-            Ok(cmds) => {
-                for cmd in cmds {
-                    if cmd.name == "timelapse" {
-                        if let Some(id) = cmd.id {
-                            if let Err(e) = interaction_client.delete_global_command(id).await {
-                                tracing::warn!("failed to delete timelapse command: {e}");
-                            } else {
-                                tracing::info!("deleted timelapse global command");
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => tracing::warn!("failed to parse global commands: {e}"),
-        },
-        Err(e) => tracing::warn!("failed to list global commands: {e}"),
-    }
 
     framework.register_global_commands().await?;
     let global_commands = interaction_client.global_commands().await?.model().await?;
