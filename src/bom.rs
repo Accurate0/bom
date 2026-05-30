@@ -3,7 +3,7 @@ use image::{codecs::gif::GifEncoder, imageops, Delay, DynamicImage, GenericImage
 use s3::error::S3Error;
 use sqlx::PgPool;
 use std::path::Path;
-use tokio::io::AsyncReadExt;
+use tokio::{io::AsyncReadExt, sync::mpsc};
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct BOM {
@@ -401,36 +401,35 @@ impl BOM {
 
         satellite_images.sort();
 
-        let mut images = Vec::new();
+        tracing::info!("encoding gif for satellite");
+
+        let (tx, mut rx) = mpsc::channel::<image::Frame>(2);
+        let encoder = tokio::task::spawn_blocking(move || {
+            let mut final_gif = Vec::<u8>::new();
+            {
+                let mut cursor = std::io::Cursor::new(&mut final_gif);
+                let mut gif_encoder = GifEncoder::new_with_speed(&mut cursor, 1);
+                gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
+                while let Some(frame) = rx.blocking_recv() {
+                    gif_encoder.encode_frame(frame)?;
+                }
+            }
+            Ok::<Vec<u8>, anyhow::Error>(final_gif)
+        });
+
         for file in satellite_images.iter().rev().take(30).rev() {
             let img = self
                 .get_or_fetch_compressed_resized(file, "image/jpg", &mut ftp_client)
                 .await?;
-
-            images.push(img);
+            let frame =
+                image::Frame::from_parts(img.to_rgba8(), 0, 0, Delay::from_numer_denom_ms(215, 1));
+            if tx.send(frame).await.is_err() {
+                break;
+            }
         }
+        drop(tx);
 
-        tracing::info!("generating frames for satellite");
-        let frames = images.into_iter().map(|i| {
-            image::Frame::from_parts(i.to_rgba8(), 0, 0, Delay::from_numer_denom_ms(215, 1))
-        });
-
-        tracing::info!("encoding gif for satellite");
-        let rt = tokio::runtime::Handle::current();
-
-        let final_gif = rt
-            .spawn_blocking(move || {
-                let mut final_gif = Vec::<u8>::new();
-                let mut final_gif_cursor = std::io::Cursor::new(&mut final_gif);
-                let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 1);
-                gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
-                gif_encoder.encode_frames(frames)?;
-
-                drop(gif_encoder);
-
-                Ok::<Vec<_>, anyhow::Error>(final_gif)
-            })
-            .await??;
+        let final_gif = encoder.await??;
 
         tracing::info!("final gif size: {}", final_gif.len());
 
@@ -468,36 +467,39 @@ impl BOM {
             .with_guessed_format()?
             .decode()?;
 
-        let mut images = Vec::new();
-        for file in radar_objects.iter() {
-            let mut base_image_clone = base_image.clone();
-
-            let img = self.get_image(RADAR_CACHE_PATH, file).await?;
-
-            imageops::overlay(&mut base_image_clone, &img, 0, 0);
-            images.push(base_image_clone);
-        }
-
         tracing::info!("generating gif for timelapse: {bom_id}");
-        let frames = images.into_iter().map(|i| {
-            image::Frame::from_parts(i.to_rgba8(), 0, 0, Delay::from_numer_denom_ms(10, 1))
+
+        let (tx, mut rx) = mpsc::channel::<image::Frame>(2);
+        let encoder = tokio::task::spawn_blocking(move || {
+            let mut final_gif = Vec::<u8>::new();
+            {
+                let mut cursor = std::io::Cursor::new(&mut final_gif);
+                let mut gif_encoder = GifEncoder::new_with_speed(&mut cursor, 1);
+                gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
+                while let Some(frame) = rx.blocking_recv() {
+                    gif_encoder.encode_frame(frame)?;
+                }
+            }
+            Ok::<Vec<u8>, anyhow::Error>(final_gif)
         });
 
-        let rt = tokio::runtime::Handle::current();
+        for file in radar_objects.iter() {
+            let img = self.get_image(RADAR_CACHE_PATH, file).await?;
+            let mut composite = base_image.clone();
+            imageops::overlay(&mut composite, &img, 0, 0);
+            let frame = image::Frame::from_parts(
+                composite.to_rgba8(),
+                0,
+                0,
+                Delay::from_numer_denom_ms(10, 1),
+            );
+            if tx.send(frame).await.is_err() {
+                break;
+            }
+        }
+        drop(tx);
 
-        let final_gif = rt
-            .spawn_blocking(move || {
-                let mut final_gif = Vec::<u8>::new();
-                let mut final_gif_cursor = std::io::Cursor::new(&mut final_gif);
-                let mut gif_encoder = GifEncoder::new_with_speed(&mut final_gif_cursor, 1);
-                gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
-                gif_encoder.encode_frames(frames)?;
-
-                drop(gif_encoder);
-
-                Ok::<Vec<_>, anyhow::Error>(final_gif)
-            })
-            .await??;
+        let final_gif = encoder.await??;
 
         tracing::info!("final gif size: {}", final_gif.len());
 
