@@ -149,61 +149,6 @@ async fn handle_interaction_error(ctx: &mut SlashContext<BotContext>, error: Def
 }
 
 #[command]
-#[description = "get radar timelapse for 24h"]
-#[error_handler(handle_interaction_error)]
-async fn timelapse(
-    ctx: &mut SlashContext<BotContext>,
-    #[autocomplete(autocomplete_location)]
-    #[description = "pick a location"]
-    location: Option<String>,
-) -> DefaultCommandResult {
-    ctx.defer(false).await?;
-
-    // perth
-    let location = location.unwrap_or_else(|| "IDR703".to_owned());
-    let location_name = sqlx::query!(
-        "SELECT name FROM locations WHERE bom_radar_id = ($1)",
-        location
-    )
-    .fetch_one(ctx.data.bom.db())
-    .await?;
-
-    let (url, bytes) = ctx.data.bom.get_radar_timelapse_24hr_for(&location).await?;
-
-    let now = chrono::offset::Utc::now().naive_utc();
-    let embed = EmbedBuilder::new()
-        .title(format!("{} 24hr timelapse", location_name.name))
-        .color(0x003366)
-        .timestamp(
-            Timestamp::from_secs(now.and_utc().timestamp())
-                .context("must have valid time")
-                .unwrap(),
-        );
-
-    tracing::info!("using url: {url}");
-
-    let image = ImageSource::attachment("url.gif");
-
-    let embed = match image {
-        Ok(image) => embed.image(image),
-        Err(e) => {
-            tracing::error!("error with image url: {e}");
-            embed
-        }
-    }
-    .build();
-
-    let attachment = Attachment::from_bytes("url.gif".to_owned(), bytes, 1);
-    ctx.interaction_client
-        .update_response(&ctx.interaction.token)
-        .embeds(Some(&[embed]))
-        .attachments(&[attachment])
-        .await?;
-
-    Ok(())
-}
-
-#[command]
 #[description = "get satellite images from bom"]
 #[error_handler(handle_interaction_error)]
 async fn satellite(ctx: &mut SlashContext<BotContext>) -> DefaultCommandResult {
@@ -563,13 +508,32 @@ async fn main() -> anyhow::Result<()> {
         Framework::builder(Arc::clone(&http), app_id, context)
             .command(radar)
             .command(satellite)
-            .command(timelapse)
             .command(forecast)
             .build(),
     );
 
-    framework.register_global_commands().await?;
     let interaction_client = http.interaction(app_id);
+    match interaction_client.global_commands().await {
+        Ok(resp) => match resp.model().await {
+            Ok(cmds) => {
+                for cmd in cmds {
+                    if cmd.name == "timelapse" {
+                        if let Some(id) = cmd.id {
+                            if let Err(e) = interaction_client.delete_global_command(id).await {
+                                tracing::warn!("failed to delete timelapse command: {e}");
+                            } else {
+                                tracing::info!("deleted timelapse global command");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("failed to parse global commands: {e}"),
+        },
+        Err(e) => tracing::warn!("failed to list global commands: {e}"),
+    }
+
+    framework.register_global_commands().await?;
     let global_commands = interaction_client.global_commands().await?.model().await?;
 
     let mut updated_commands = Vec::with_capacity(global_commands.len());

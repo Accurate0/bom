@@ -265,23 +265,6 @@ impl BOM {
         Ok(())
     }
 
-    async fn get_image(&self, cache_path: &str, path: &str) -> Result<DynamicImage, BOMError> {
-        let path_obj = Path::new(path);
-        let basename = path_obj.file_name().unwrap().to_str().unwrap();
-
-        let cache_path = format!("{cache_path}/{basename}");
-
-        tracing::info!("fetching image from s3: {path}");
-        let file = self.bucket.get_object(cache_path).await?;
-        let file = file.into_bytes().to_vec();
-
-        let img = image::ImageReader::new(std::io::Cursor::new(file))
-            .with_guessed_format()?
-            .decode()?;
-
-        Ok(img)
-    }
-
     async fn get_or_fetch_image(
         &self,
         cache_path: &str,
@@ -361,18 +344,6 @@ impl BOM {
         Ok(())
     }
 
-    pub async fn get_radar_timelapse_24hr_for(
-        &self,
-        bom_id: &str,
-    ) -> Result<(String, Vec<u8>), BOMError> {
-        let bucket_path = format!("external/{}.radar.24h.gif", bom_id);
-
-        return Ok((
-            format!("{IMAGE_HOST}/{bucket_path}"),
-            self.bucket().get_object(&bucket_path).await?.to_vec(),
-        ));
-    }
-
     pub async fn get_latest_satellite_gif_for(
         &self,
         bom_id: &str,
@@ -423,76 +394,6 @@ impl BOM {
                 .await?;
             let frame =
                 image::Frame::from_parts(img.to_rgba8(), 0, 0, Delay::from_numer_denom_ms(215, 1));
-            if tx.send(frame).await.is_err() {
-                break;
-            }
-        }
-        drop(tx);
-
-        let final_gif = encoder.await??;
-
-        tracing::info!("final gif size: {}", final_gif.len());
-
-        self.bucket
-            .put_object_with_content_type(&bucket_path, &final_gif, "image/gif")
-            .await?;
-
-        Ok((format!("{IMAGE_HOST}/{bucket_path}"), final_gif))
-    }
-
-    pub async fn generate_radar_timelapse_24hr_for(
-        &self,
-        bom_id: &str,
-    ) -> Result<(String, Vec<u8>), BOMError> {
-        let bucket_path = format!("external/{}.radar.24h.gif", bom_id);
-
-        let bucket = self.bucket();
-        let mut radar_objects = bucket
-            .list(RADAR_CACHE_PATH.to_owned(), None)
-            .await?
-            .into_iter()
-            .flat_map(|i| i.contents)
-            .filter(|o| {
-                o.key
-                    .starts_with(&format!("{RADAR_CACHE_PATH}/{bom_id}.T."))
-            })
-            .map(|o| o.key)
-            .collect::<Vec<_>>();
-
-        radar_objects.sort();
-
-        let base_image = self.bucket.get_object(format!("{bom_id}.base.png")).await?;
-        let base_image_bytes = base_image.into_bytes().to_vec();
-        let base_image = image::ImageReader::new(std::io::Cursor::new(base_image_bytes))
-            .with_guessed_format()?
-            .decode()?;
-
-        tracing::info!("generating gif for timelapse: {bom_id}");
-
-        let (tx, mut rx) = mpsc::channel::<image::Frame>(2);
-        let encoder = tokio::task::spawn_blocking(move || {
-            let mut final_gif = Vec::<u8>::new();
-            {
-                let mut cursor = std::io::Cursor::new(&mut final_gif);
-                let mut gif_encoder = GifEncoder::new_with_speed(&mut cursor, 1);
-                gif_encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
-                while let Some(frame) = rx.blocking_recv() {
-                    gif_encoder.encode_frame(frame)?;
-                }
-            }
-            Ok::<Vec<u8>, anyhow::Error>(final_gif)
-        });
-
-        for file in radar_objects.iter() {
-            let img = self.get_image(RADAR_CACHE_PATH, file).await?;
-            let mut composite = base_image.clone();
-            imageops::overlay(&mut composite, &img, 0, 0);
-            let frame = image::Frame::from_parts(
-                composite.to_rgba8(),
-                0,
-                0,
-                Delay::from_numer_denom_ms(10, 1),
-            );
             if tx.send(frame).await.is_err() {
                 break;
             }

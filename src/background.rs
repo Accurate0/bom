@@ -16,14 +16,6 @@ pub async fn refresh_all_images(bom: Arc<bom::BOM>) -> Result<(), bom::BOMError>
         if let Err(e) = bom.fetch_all_radar_images_for(&location.bom_radar_id).await {
             tracing::error!("radar image failed: {e}");
         };
-
-        tracing::info!("generating timelapse for {}", location.name);
-        if let Err(e) = bom
-            .generate_radar_timelapse_24hr_for(&location.bom_radar_id)
-            .await
-        {
-            tracing::error!("radar timelapse failed: {e}")
-        };
     }
 
     let satellites = sqlx::query!("SELECT * FROM satellites")
