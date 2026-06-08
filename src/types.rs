@@ -116,7 +116,7 @@ pub struct Uv {
 pub struct UvDay {
     pub date_time: String,
     pub entries: Vec<UvEntry>,
-    pub alert: Alert,
+    pub alert: Option<Alert>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]

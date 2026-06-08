@@ -318,7 +318,12 @@ async fn forecast(
         let datetime_with_timezone = &format!("{} +0800", entry.date_time);
         let datetime = DateTime::parse_from_str(datetime_with_timezone, "%Y-%m-%d %H:%M:%S %z")?;
         let emoji = PRECIS_TO_EMOJI.get(&entry.precis_code).map_or("", |e| e);
-        let uv_level = forecast.forecasts.uv.days.get(i).map(|e| &e.alert);
+        let uv_level = forecast
+            .forecasts
+            .uv
+            .days
+            .get(i)
+            .and_then(|e| e.alert.as_ref().map(|a| a.max_index));
 
         let formatted_date = if datetime.date_naive() == Utc::now().date_naive() {
             "Today".to_owned()
@@ -329,7 +334,7 @@ async fn forecast(
         let temperature_details = if let Some(uv_level) = uv_level {
             format!(
                 "**Max:** {}°c, **Min:** {}°c, **UV:** {:.1}",
-                max, min, uv_level.max_index
+                max, min, uv_level
             )
         } else {
             format!("**Max:** {}°c, **Min:** {}°c", max, min)
@@ -397,7 +402,7 @@ async fn forecast_endpoint(
             description,
             min,
             max,
-            uv: uv_level.map(|uv| uv.max_index),
+            uv: uv_level.and_then(|uv| uv.as_ref().map(|a| a.max_index)),
         });
     }
 

@@ -16,6 +16,8 @@ pub enum WillyWeatherAPIError {
     Http(#[from] reqwest::Error),
     #[error("unknown error occurred: {0}")]
     Unknown(#[from] anyhow::Error),
+    #[error("serde error occurred: {0}")]
+    Serde(#[from] serde_json::Error),
 }
 
 impl WillyWeatherAPI {
@@ -53,10 +55,8 @@ impl WillyWeatherAPI {
             .query(&[("forecasts", "weather,uv"), ("days", &days.to_string())])
             .send()
             .await?
-            .error_for_status()?
-            .json::<WillyWeatherForecast>()
-            .await?;
+            .error_for_status()?;
 
-        Ok(response)
+        Ok(serde_json::from_str(&response.text().await?)?)
     }
 }
