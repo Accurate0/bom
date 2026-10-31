@@ -25,7 +25,8 @@ jobs:
     with:
       service-name: bom
       images: ghcr.io/accurate0/bom
-      manifests-path: projects/bom/manifests
+      manifests-path: projects/bom
+      values-file: projects/bom/image.values.yaml
       tag: ${{ github.sha }}
     secrets:
       FORGEJO_TOKEN: ${{ secrets.FORGEJO_CI_IMAGE_UPDATER }}
