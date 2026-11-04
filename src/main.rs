@@ -425,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
     let access_secret_key = std::env::var("BUCKET_ACCESS_SECRET_KEY")?;
     let bucket_name = std::env::var("BUCKET_NAME")?;
     let bucket_endpoint = std::env::var("BUCKET_ENDPOINT")?;
+    let bucket_region = std::env::var("BUCKET_REGION").unwrap_or_default();
     let willyweather_api_key = std::env::var("WILLYWEATHER_API_KEY")?;
 
     let credentials = s3::creds::Credentials::new(
@@ -438,7 +439,7 @@ async fn main() -> anyhow::Result<()> {
     let bucket = s3::Bucket::new(
         &bucket_name,
         s3::Region::Custom {
-            region: "".to_owned(),
+            region: bucket_region,
             endpoint: bucket_endpoint,
         },
         credentials,
