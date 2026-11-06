@@ -1,0 +1,104 @@
+type BomForecastDay {
+	dateTime: String!
+	code: String!
+	description: String!
+	emoji: String!
+	min: Int!
+	max: Int!
+	uv: Float
+}
+
+type BomRadarFrame implements Node @key(fields: "id") {
+	radarId: String!
+	capturedAt: DateTime!
+	"""
+	Public, cacheable PNG; transparent rain over the location's base image.
+	"""
+	url: String!
+	id: ID!
+	location: BomRadarLocation!
+}
+
+type BomRadarLocation implements Node @key(fields: "id") {
+	"""
+	The BOM product id, e.g. IDR703.
+	"""
+	radarId: String!
+	name: String!
+	id: ID!
+	"""
+	The map underlay (background, topography, place names) frames are drawn over.
+	"""
+	baseImageUrl: String!
+	"""
+	Cached frames, oldest first; the newest `limit` of them.
+	"""
+	frames(limit: Int! = 20): [BomRadarFrame!]!
+	latestFrame: BomRadarFrame
+}
+
+type BomSatellite implements Node @key(fields: "id") {
+	"""
+	The BOM product id, e.g. IDE00416.
+	"""
+	satelliteId: String!
+	name: String!
+	id: ID!
+	"""
+	An animated loop of the latest frames, refreshed in the background.
+	"""
+	latestGifUrl: String!
+	frames(limit: Int! = 20): [BomSatelliteFrame!]!
+}
+
+type BomSatelliteFrame implements Node @key(fields: "id") {
+	satelliteId: String!
+	capturedAt: DateTime!
+	url: String!
+	id: ID!
+}
+
+"""
+Implement the DateTime<Utc> scalar
+
+The input/output is a string in RFC3339 format.
+"""
+scalar DateTime
+
+interface Node {
+	id: ID!
+}
+
+type Query {
+	bomRadarLocations: [BomRadarLocation!]!
+	bomRadarLocation(radarId: String!): BomRadarLocation!
+	bomSatellites: [BomSatellite!]!
+	"""
+	Seven days from WillyWeather; `location` is a WillyWeather id, Perth by default.
+	"""
+	bomForecast(location: String): [BomForecastDay!]!
+}
+
+type Subscription {
+	"""
+	New frames for the radar as the background refresh caches them.
+	"""
+	bomRadarFrames(radarId: String!): BomRadarFrame!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
+extend schema @link(
+	url: "https://specs.apollo.dev/federation/v2.5",
+	import: ["@key", "@tag", "@shareable", "@inaccessible", "@override", "@external", "@provides", "@requires", "@composeDirective", "@interfaceObject", "@requiresScopes"]
+)

@@ -42,6 +42,9 @@ use vesper::{
 
 mod background;
 mod bom;
+mod graphql;
+mod images;
+mod subgraph;
 mod types;
 mod willyweather;
 
@@ -375,7 +378,16 @@ async fn forecast_endpoint(
         .clone()
         .unwrap_or_else(|| WillyWeatherAPI::PERTH_ID.to_owned());
 
-    let forecast_resp = ctx.willyweather.get_forecast(&location, &7).await?;
+    Ok(Json(ForecastEndpointResponse {
+        days: forecast_days(&ctx.willyweather, &location).await?,
+    }))
+}
+
+async fn forecast_days(
+    willyweather: &WillyWeatherAPI,
+    location: &str,
+) -> anyhow::Result<Vec<ForecastForDay>> {
+    let forecast_resp = willyweather.get_forecast(location, &7).await?;
     let mut forecast_for_days = Vec::with_capacity(7);
 
     for (i, days) in forecast_resp.forecasts.weather.days.into_iter().enumerate() {
@@ -406,9 +418,7 @@ async fn forecast_endpoint(
         });
     }
 
-    Ok(Json(ForecastEndpointResponse {
-        days: forecast_for_days,
-    }))
+    Ok(forecast_for_days)
 }
 
 #[tokio::main]
@@ -479,10 +489,22 @@ async fn main() -> anyhow::Result<()> {
         .resource_types(ResourceType::MESSAGE | ResourceType::GUILD)
         .build();
 
+    let public_url =
+        std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://bom.anurag.sh".to_owned());
+    let graph = match subgraph::AuthConfig::from_env() {
+        Ok(auth) => graphql::router(context.clone(), public_url, auth),
+        Err(e) => {
+            tracing::warn!("graphql subgraph disabled: {e}");
+            axum::Router::new()
+        }
+    };
+
     let app = axum::Router::new()
         .route("/health", get(health))
         .route("/forecast", get(forecast_endpoint))
-        .with_state(context.clone());
+        .with_state(context.clone())
+        .merge(images::router(bom.clone()))
+        .merge(graph);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
     tracing::info!("spawning axum");
