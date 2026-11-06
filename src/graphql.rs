@@ -25,6 +25,7 @@ pub fn builder() -> SchemaBuilder<QueryRoot, EmptyMutation, SubscriptionRoot> {
         .register_output_type::<Node>()
         .enable_federation()
         .enable_subscription_in_federation()
+        .extension(crate::subgraph::Tracing)
 }
 
 pub fn router(context: BotContext, public_url: String, auth: AuthConfig) -> axum::Router {

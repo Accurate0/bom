@@ -3,9 +3,11 @@
 pub mod auth;
 pub mod node;
 pub mod server;
+pub mod telemetry;
 
 pub use auth::{AuthConfig, Authenticator};
 pub use server::router;
+pub use telemetry::Tracing;
 
 #[cfg(test)]
 pub fn assert_subgraph_current<Q, M, S>(

@@ -9,13 +9,12 @@ use axum::{
     routing::get,
     Json,
 };
+use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use chrono::{DateTime, Utc};
 use phf::phf_map;
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, ops::Deref, sync::Arc, time::Duration};
-use tracing::Level;
-use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 use twilight_cache_inmemory::{DefaultCacheModels, InMemoryCacheBuilder, ResourceType};
 use twilight_gateway::{
     ConfigBuilder, Event, EventType, EventTypeFlags, Intents, Shard, ShardId, StreamExt,
@@ -45,6 +44,7 @@ mod bom;
 mod graphql;
 mod images;
 mod subgraph;
+mod tracing_setup;
 mod types;
 mod willyweather;
 
@@ -423,10 +423,7 @@ async fn forecast_days(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(Targets::default().with_default(Level::INFO))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let _otel = tracing_setup::init();
 
     let database_url = std::env::var("DATABASE_URL")?;
     let token = std::env::var("DISCORD_TOKEN")?;
@@ -504,7 +501,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/forecast", get(forecast_endpoint))
         .with_state(context.clone())
         .merge(images::router(bom.clone()))
-        .merge(graph);
+        .merge(graph)
+        .layer(OtelInResponseLayer)
+        .layer(OtelAxumLayer::default().filter(|path| path != "/health"));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
     tracing::info!("spawning axum");

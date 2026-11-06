@@ -20,6 +20,13 @@ thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
+http = "1"
+opentelemetry = { version = "0.33.0", features = ["trace"] }
+opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33.0", features = ["trace", "reqwest-blocking-client", "reqwest-rustls", "http-json"] }
+opentelemetry-semantic-conventions = { version = "0.33.0", features = ["semconv_experimental"] }
+tracing-opentelemetry = "0.34.0"
+axum-tracing-opentelemetry = "0.42.0"
 twilight-cache-inmemory = "0.16.0"
 twilight-gateway = "0.16.0"
 twilight-http = "0.16.0"
