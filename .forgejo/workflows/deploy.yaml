@@ -15,16 +15,3 @@ jobs:
       image-name: bom
       build-args: |
         BINARY_NAME=bom
-
-  deploy:
-    needs:
-      - build
-    uses: anurag/workflows/.forgejo/workflows/deploy-image.yaml@main
-    with:
-      service-name: bom
-      images: registry.anurag.sh/containers/bom
-      manifests-path: projects/bom
-      values-file: projects/bom/image.values.yaml
-      tag: ${{ github.sha }}
-    secrets:
-      CI_IMAGE_UPDATER_TOKEN: ${{ secrets.CI_IMAGE_UPDATER_TOKEN }}
