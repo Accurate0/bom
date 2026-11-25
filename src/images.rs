@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use axum::{
+    Router,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
 use regex::Regex;

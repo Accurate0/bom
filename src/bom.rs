@@ -1,5 +1,5 @@
 use async_ftp::{FtpError, FtpStream};
-use image::{codecs::gif::GifEncoder, imageops, Delay, DynamicImage, GenericImageView};
+use image::{Delay, DynamicImage, GenericImageView, codecs::gif::GifEncoder, imageops};
 use s3::error::S3Error;
 use sqlx::PgPool;
 use std::path::Path;

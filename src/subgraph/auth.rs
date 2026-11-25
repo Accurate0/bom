@@ -1,13 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use serde::de::DeserializeOwned;
+use tokio::sync::{Mutex, RwLock};
+
+use crate::subgraph::external::{ClaimPattern, External, ExternalIssuer, any_matches};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -36,15 +39,32 @@ impl IntoResponse for AuthError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Provider {
     pub issuer: String,
     pub audience: String,
 }
 
+/// `SUBGRAPH_AUTH`, rendered by ortzi-app from the subgraph resource's `auth`.
+#[derive(Debug, Clone, Deserialize)]
+struct SubgraphAuth {
+    providers: Vec<Provider>,
+    scopes: Vec<String>,
+    /// Still admitted while their tokens predate the scopes.
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    external: Vec<ExternalAuth>,
+}
+
 impl AuthConfig {
-    /// OIDC_PROVIDERS (comma-separated `<issuer>=<audience>`) and OIDC_GROUPS (comma-separated).
+    /// SUBGRAPH_AUTH (scopes), or the older OIDC_PROVIDERS (comma-separated `<issuer>=<audience>`)
+    /// and OIDC_GROUPS (comma-separated).
     pub fn from_env() -> Result<Self, String> {
+        if let Ok(json) = std::env::var("SUBGRAPH_AUTH") {
+            return Self::from_subgraph_auth(&json);
+        }
+
         let list = |name: &str| -> Result<Vec<String>, String> {
             let value = std::env::var(name).map_err(|_| format!("{name} is not set"))?;
             Ok(value
@@ -62,7 +82,34 @@ impl AuthConfig {
         if providers.is_empty() || groups.is_empty() {
             return Err("OIDC_PROVIDERS and OIDC_GROUPS must not be empty".to_owned());
         }
-        Ok(Self { providers, groups })
+
+        let external = match std::env::var("EXTERNAL_ISSUERS") {
+            Ok(json) => serde_json::from_str(&json)
+                .map_err(|e| format!("EXTERNAL_ISSUERS is not a valid list: {e}"))?,
+            Err(_) => Vec::new(),
+        };
+
+        Ok(Self {
+            providers,
+            groups,
+            scopes: Vec::new(),
+            external,
+        })
+    }
+
+    pub fn from_subgraph_auth(json: &str) -> Result<Self, String> {
+        let auth: SubgraphAuth =
+            serde_json::from_str(json).map_err(|e| format!("SUBGRAPH_AUTH is not valid: {e}"))?;
+        if auth.providers.is_empty() || auth.scopes.is_empty() {
+            return Err("SUBGRAPH_AUTH needs providers and scopes".to_owned());
+        }
+
+        Ok(Self {
+            providers: auth.providers,
+            groups: auth.groups,
+            scopes: auth.scopes,
+            external: auth.external,
+        })
     }
 }
 
@@ -85,8 +132,37 @@ impl std::str::FromStr for Provider {
 #[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub providers: Vec<Provider>,
-    /// The caller must hold one of these groups (short name or SPN).
+    /// Holding one of these groups (short name or SPN) admits the caller, until subgraphs only
+    /// use scopes.
     pub groups: Vec<String>,
+    /// The scopes this subgraph defines; holding one of them admits the caller.
+    pub scopes: Vec<String>,
+    /// External issuers (e.g. forgejo actions) admitted by claim patterns instead of groups.
+    pub external: Vec<ExternalAuth>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExternalAuth {
+    #[serde(flatten)]
+    pub issuer: ExternalIssuer,
+    /// Admits the whole subgraph, before scopes.
+    #[serde(default)]
+    pub patterns: Vec<ClaimPattern>,
+    /// Scopes held by tokens whose claims match.
+    #[serde(default)]
+    pub grants: Vec<Grant>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Grant {
+    pub scope: String,
+    pub claims: BTreeMap<String, crate::subgraph::external::OneOrMany>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Principal {
+    User(Claims),
+    External(External),
 }
 
 #[derive(Deserialize)]
@@ -98,14 +174,36 @@ struct Issuer {
 pub struct Claims {
     pub sub: String,
     #[serde(default)]
+    pub jti: Option<String>,
+    #[serde(default)]
     pub preferred_username: Option<String>,
     #[serde(default)]
     pub groups: Option<Vec<String>>,
+    /// Space-separated, as Kanidm issues it; supplementary scope maps land here.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 impl Claims {
     pub fn identity(&self) -> &str {
         self.preferred_username.as_deref().unwrap_or(&self.sub)
+    }
+
+    pub fn scopes(&self) -> BTreeSet<&str> {
+        self.scope
+            .as_deref()
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect()
+    }
+
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.scopes().contains(scope)
+    }
+
+    pub fn in_any(&self, allowed: &[&str]) -> bool {
+        let allowed: Vec<String> = allowed.iter().map(|a| (*a).to_owned()).collect();
+        groups_match(self.groups.as_deref().unwrap_or_default(), &allowed)
     }
 }
 
@@ -113,6 +211,8 @@ impl Claims {
 struct UserInfo {
     #[serde(default)]
     groups: Vec<String>,
+    #[serde(default)]
+    preferred_username: Option<String>,
 }
 
 /// Kanidm reports groups as SPNs (`name@domain`) or UUIDs; match on either full SPN or name.
@@ -139,33 +239,62 @@ pub struct Authenticator {
 struct Inner {
     client: reqwest::Client,
     groups: Vec<String>,
+    scopes: Vec<String>,
     issuers: Vec<IssuerKeys>,
 }
 
+enum IssuerKind {
+    User,
+    External {
+        name: String,
+        patterns: Vec<ClaimPattern>,
+        grants: Vec<Grant>,
+    },
+}
+
 struct IssuerKeys {
-    provider: Provider,
+    issuer: String,
+    audience: String,
+    kind: IssuerKind,
     jwks_uri: String,
     userinfo_endpoint: String,
     keys: RwLock<BTreeMap<String, VerifyingKey>>,
+    last_refresh: Mutex<Option<Instant>>,
 }
 
 impl Authenticator {
     const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
+    const UNKNOWN_KID_COOLDOWN: Duration = Duration::from_secs(30);
 
     pub fn new(config: AuthConfig) -> Self {
-        let issuers = config
-            .providers
-            .into_iter()
-            .map(|provider| {
-                let base = provider.issuer.trim_end_matches('/').to_owned();
-                IssuerKeys {
-                    jwks_uri: format!("{base}/public_key.jwk"),
-                    userinfo_endpoint: format!("{base}/userinfo"),
-                    provider,
-                    keys: RwLock::new(BTreeMap::new()),
-                }
-            })
-            .collect();
+        let users = config.providers.into_iter().map(|provider| {
+            let base = provider.issuer.trim_end_matches('/').to_owned();
+            IssuerKeys {
+                jwks_uri: format!("{base}/public_key.jwk"),
+                userinfo_endpoint: format!("{base}/userinfo"),
+                issuer: provider.issuer,
+                audience: provider.audience,
+                kind: IssuerKind::User,
+                keys: RwLock::new(BTreeMap::new()),
+                last_refresh: Mutex::new(None),
+            }
+        });
+
+        let external = config.external.into_iter().map(|external| IssuerKeys {
+            jwks_uri: external.issuer.jwks,
+            userinfo_endpoint: String::new(),
+            issuer: external.issuer.issuer,
+            audience: external.issuer.audience,
+            kind: IssuerKind::External {
+                name: external.issuer.name,
+                patterns: external.patterns,
+                grants: external.grants,
+            },
+            keys: RwLock::new(BTreeMap::new()),
+            last_refresh: Mutex::new(None),
+        });
+
+        let issuers = users.chain(external).collect();
         Self {
             inner: Arc::new(Inner {
                 client: reqwest::Client::builder()
@@ -174,6 +303,7 @@ impl Authenticator {
                     .build()
                     .unwrap_or_default(),
                 groups: config.groups,
+                scopes: config.scopes,
                 issuers,
             }),
         }
@@ -185,42 +315,97 @@ impl Authenticator {
         self.inner
             .issuers
             .iter()
-            .find(|i| i.provider.issuer == iss)
+            .find(|i| i.issuer == iss)
             .ok_or_else(|| AuthError::Unauthorized(format!("untrusted issuer {iss}")))
     }
 
-    /// Verifies the token and its groups; the returned claims always carry the groups.
-    pub async fn authorize(&self, token: &str) -> Result<Claims, AuthError> {
+    /// Verifies a user token and its groups, or an external token against its claim patterns.
+    pub async fn authenticate(&self, token: &str) -> Result<Principal, AuthError> {
         let issuer = self.issuer_for(token)?;
-        let mut claims = self.verify(issuer, token).await?;
-        if claims.groups.is_none() {
-            claims.groups = Some(self.userinfo_groups(issuer, token).await?);
+        let IssuerKind::External {
+            name,
+            patterns,
+            grants,
+        } = &issuer.kind
+        else {
+            return self
+                .authorize_user(issuer, token)
+                .await
+                .map(Principal::User);
+        };
+
+        let claims: serde_json::Value = self.verify(issuer, token).await?;
+        let scopes = granted_scopes(grants, name, &claims);
+        if scopes.is_empty() && !any_matches(patterns, name, &claims) {
+            return Err(AuthError::Forbidden(format!(
+                "this {name} identity is not allowed here"
+            )));
         }
 
-        let allowed = &self.inner.groups;
-        if !groups_match(claims.groups.as_deref().unwrap_or_default(), allowed) {
+        Ok(Principal::External(External {
+            issuer: name.clone(),
+            claims,
+            scopes,
+        }))
+    }
+
+    /// Verifies a user token and its groups; the returned claims always carry the groups.
+    pub async fn authorize(&self, token: &str) -> Result<Claims, AuthError> {
+        let issuer = self.issuer_for(token)?;
+        if let IssuerKind::External { name, .. } = &issuer.kind {
             return Err(AuthError::Forbidden(format!(
-                "{} is not in any of {allowed:?}",
-                claims.identity()
+                "{name} tokens can't act as a user"
+            )));
+        }
+
+        self.authorize_user(issuer, token).await
+    }
+
+    async fn authorize_user(&self, issuer: &IssuerKeys, token: &str) -> Result<Claims, AuthError> {
+        let mut claims: Claims = self.verify(issuer, token).await?;
+        // Kanidm access tokens carry neither groups nor a username; userinfo has both. Scoped
+        // subgraphs don't gate on the groups, but may still use them, e.g. for per-resource grants.
+        let need_groups = !self.inner.groups.is_empty() && claims.groups.is_none();
+        if need_groups || claims.preferred_username.is_none() {
+            let info = self.userinfo(issuer, token).await?;
+            claims.groups.get_or_insert(info.groups);
+            if claims.preferred_username.is_none() {
+                claims.preferred_username = info.preferred_username;
+            }
+        }
+
+        let held = claims.scopes();
+        let scoped = self
+            .inner
+            .scopes
+            .iter()
+            .any(|scope| held.contains(scope.as_str()));
+        let grouped = !self.inner.groups.is_empty()
+            && groups_match(
+                claims.groups.as_deref().unwrap_or_default(),
+                &self.inner.groups,
+            );
+        if !scoped && !grouped {
+            return Err(AuthError::Forbidden(format!(
+                "{} holds none of {:?} and is in none of {:?}",
+                claims.identity(),
+                self.inner.scopes,
+                self.inner.groups
             )));
         }
         Ok(claims)
     }
 
-    pub async fn authorize_headers(&self, headers: &HeaderMap) -> Result<Claims, AuthError> {
+    pub async fn authenticate_headers(&self, headers: &HeaderMap) -> Result<Principal, AuthError> {
         let token = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(bearer)
             .ok_or_else(|| AuthError::Unauthorized("missing bearer token".to_owned()))?;
-        self.authorize(token).await
+        self.authenticate(token).await
     }
 
-    async fn userinfo_groups(
-        &self,
-        issuer: &IssuerKeys,
-        token: &str,
-    ) -> Result<Vec<String>, AuthError> {
+    async fn userinfo(&self, issuer: &IssuerKeys, token: &str) -> Result<UserInfo, AuthError> {
         let info: UserInfo = self
             .inner
             .client
@@ -231,7 +416,7 @@ impl Authenticator {
             .error_for_status()?
             .json()
             .await?;
-        Ok(info.groups)
+        Ok(info)
     }
 
     /// Refreshes every issuer's keys, returning how many were loaded in all. One issuer failing
@@ -243,7 +428,7 @@ impl Authenticator {
             match self.refresh_issuer(issuer).await {
                 Ok(count) => total += count,
                 Err(e) => {
-                    tracing::warn!(issuer = issuer.provider.issuer, "jwks refresh failed: {e}");
+                    tracing::warn!(issuer = issuer.issuer, "jwks refresh failed: {e}");
                     failure = Some(e);
                 }
             }
@@ -255,6 +440,8 @@ impl Authenticator {
     }
 
     async fn refresh_issuer(&self, issuer: &IssuerKeys) -> Result<usize, AuthError> {
+        *issuer.last_refresh.lock().await = Some(Instant::now());
+
         let set: JwkSet = self
             .inner
             .client
@@ -301,11 +488,7 @@ impl Authenticator {
 
         let count = keys.len();
         *issuer.keys.write().await = keys;
-        tracing::info!(
-            issuer = issuer.provider.issuer,
-            keys = count,
-            "refreshed jwks"
-        );
+        tracing::info!(issuer = issuer.issuer, keys = count, "refreshed jwks");
         Ok(count)
     }
 
@@ -321,7 +504,11 @@ impl Authenticator {
         }
     }
 
-    async fn verify(&self, issuer: &IssuerKeys, token: &str) -> Result<Claims, AuthError> {
+    async fn verify<T: DeserializeOwned>(
+        &self,
+        issuer: &IssuerKeys,
+        token: &str,
+    ) -> Result<T, AuthError> {
         let header = decode_header(token)
             .map_err(|e| AuthError::Unauthorized(format!("unreadable token header: {e}")))?;
         let kid = header
@@ -329,7 +516,7 @@ impl Authenticator {
             .ok_or_else(|| AuthError::Unauthorized("token has no kid".to_owned()))?;
 
         let mut key = issuer.keys.read().await.get(&kid).cloned();
-        if key.is_none() {
+        if key.is_none() && self.may_refresh(issuer).await {
             tracing::info!("unknown kid {kid}, refreshing jwks");
             self.refresh_issuer(issuer).await?;
             key = issuer.keys.read().await.get(&kid).cloned();
@@ -337,12 +524,49 @@ impl Authenticator {
         let key = key.ok_or_else(|| AuthError::Unauthorized(format!("no key for kid {kid}")))?;
 
         let mut validation = Validation::new(key.alg.unwrap_or(header.alg));
-        validation.set_issuer(&[&issuer.provider.issuer]);
-        validation.set_audience(&[&issuer.provider.audience]);
+        validation.set_issuer(&[&issuer.issuer]);
+        validation.set_audience(&[&issuer.audience]);
 
-        decode::<Claims>(token, &key.key, &validation)
+        decode::<T>(token, &key.key, &validation)
             .map(|data| data.claims)
             .map_err(|e| AuthError::Unauthorized(format!("token rejected: {e}")))
+    }
+}
+
+impl Authenticator {
+    async fn may_refresh(&self, issuer: &IssuerKeys) -> bool {
+        issuer
+            .last_refresh
+            .lock()
+            .await
+            .is_none_or(|at| at.elapsed() >= Self::UNKNOWN_KID_COOLDOWN)
+    }
+}
+
+pub fn granted_scopes(
+    grants: &[Grant],
+    issuer: &str,
+    claims: &serde_json::Value,
+) -> BTreeSet<String> {
+    grants
+        .iter()
+        .filter(|grant| {
+            ClaimPattern {
+                issuer: issuer.to_owned(),
+                claims: grant.claims.clone(),
+            }
+            .matches(issuer, claims)
+        })
+        .map(|grant| grant.scope.clone())
+        .collect()
+}
+
+impl Principal {
+    pub fn scopes(&self) -> BTreeSet<String> {
+        match self {
+            Principal::User(claims) => claims.scopes().into_iter().map(str::to_owned).collect(),
+            Principal::External(external) => external.scopes.clone(),
+        }
     }
 }
 
@@ -381,6 +605,17 @@ mod tests {
                     .unwrap(),
             ],
             groups: vec!["spotify_users".to_owned()],
+            scopes: Vec::new(),
+            external: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "forgejo",
+                    "issuer": "https://git.example.test/api/actions",
+                    "jwks": "https://git.example.test/api/actions/.well-known/keys",
+                    "audience": "graph.example.test",
+                    "patterns": [{ "issuer": "forgejo", "claims": { "repository": "*" } }],
+                }))
+                .unwrap(),
+            ],
         })
     }
 
@@ -394,6 +629,52 @@ mod tests {
             encode(serde_json::json!({ "alg": "ES256", "kid": "k" })),
             encode(serde_json::json!({ "iss": iss, "sub": "u" }))
         )
+    }
+
+    #[test]
+    fn external_issuers_use_their_declared_jwks_and_audience() {
+        let auth = authenticator();
+        let forgejo = auth
+            .issuer_for(&token("https://git.example.test/api/actions"))
+            .unwrap();
+        assert!(matches!(&forgejo.kind, IssuerKind::External { name, .. } if name == "forgejo"));
+        assert_eq!(forgejo.audience, "graph.example.test");
+        assert_eq!(
+            forgejo.jwks_uri,
+            "https://git.example.test/api/actions/.well-known/keys"
+        );
+    }
+
+    #[test]
+    fn external_issuers_parse_from_env_json() {
+        let parsed: Vec<ExternalAuth> = serde_json::from_str(
+            r#"[{"name":"forgejo","issuer":"https://git.example.test/api/actions",
+                "jwks":"https://git.example.test/api/actions/.well-known/keys",
+                "audience":"graph.example.test",
+                "patterns":[{"issuer":"forgejo","claims":{"ref":["refs/heads/main"]}}]}]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].issuer.name, "forgejo");
+        assert_eq!(parsed[0].patterns.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn external_tokens_cannot_act_as_users() {
+        let auth = authenticator();
+        assert!(matches!(
+            auth.authorize(&token("https://git.example.test/api/actions"))
+                .await,
+            Err(AuthError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn unknown_kids_refresh_at_most_once_per_cooldown() {
+        let auth = authenticator();
+        let issuer = &auth.inner.issuers[0];
+        assert!(auth.may_refresh(issuer).await);
+        *issuer.last_refresh.lock().await = Some(Instant::now());
+        assert!(!auth.may_refresh(issuer).await);
     }
 
     #[test]
@@ -427,6 +708,43 @@ mod tests {
     }
 
     #[test]
+    fn subgraph_auth_parses_providers_scopes_and_grants() {
+        let config = AuthConfig::from_subgraph_auth(
+            r#"{"providers":[{"issuer":"https://idm.example.test/oauth2/openid/graph","audience":"graph"}],
+                "scopes":["registry:package:read","registry:package:publish"],
+                "external":[{"name":"forgejo","issuer":"https://git.example.test/api/actions",
+                  "jwks":"https://git.example.test/keys","audience":"graph.example.test",
+                  "grants":[{"scope":"registry:package:publish","claims":{"repository":"anurag/*","ref":"refs/heads/main"}}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(config.providers[0].audience, "graph");
+        assert_eq!(config.scopes.len(), 2);
+        assert!(config.groups.is_empty());
+
+        let grants = &config.external[0].grants;
+        let main = serde_json::json!({ "repository": "anurag/k8s", "ref": "refs/heads/main" });
+        let branch = serde_json::json!({ "repository": "anurag/k8s", "ref": "refs/heads/x" });
+        assert_eq!(
+            granted_scopes(grants, "forgejo", &main),
+            BTreeSet::from(["registry:package:publish".to_owned()])
+        );
+        assert!(granted_scopes(grants, "forgejo", &branch).is_empty());
+
+        assert!(AuthConfig::from_subgraph_auth(r#"{"providers":[],"scopes":[]}"#).is_err());
+    }
+
+    #[test]
+    fn user_scopes_come_from_the_space_separated_claim() {
+        let claims: Claims = serde_json::from_value(serde_json::json!({
+            "sub": "u", "scope": "openid email registry:package:read"
+        }))
+        .unwrap();
+        assert!(claims.has_scope("registry:package:read"));
+        assert!(!claims.has_scope("registry:token:create"));
+        assert!(Principal::User(claims).scopes().contains("openid"));
+    }
+
+    #[test]
     fn providers_parse_issuer_and_audience() {
         assert_eq!(
             "https://idm.example.test/oauth2/openid/graph=graph"
@@ -447,7 +765,7 @@ mod tests {
         let graph = auth
             .issuer_for(&token("https://idm.example.test/oauth2/openid/graph"))
             .unwrap();
-        assert_eq!(graph.provider.audience, "graph");
+        assert_eq!(graph.audience, "graph");
         assert!(matches!(
             auth.issuer_for(&token("https://elsewhere.test")),
             Err(AuthError::Unauthorized(_))

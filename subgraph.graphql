@@ -70,13 +70,13 @@ interface Node {
 }
 
 type Query {
-	bomRadarLocations: [BomRadarLocation!]!
-	bomRadarLocation(radarId: String!): BomRadarLocation!
-	bomSatellites: [BomSatellite!]!
+	bomRadarLocations: [BomRadarLocation!]! @requiresScopes(scopes: [["bom:radar:read"]])
+	bomRadarLocation(radarId: String!): BomRadarLocation! @requiresScopes(scopes: [["bom:radar:read"]])
+	bomSatellites: [BomSatellite!]! @requiresScopes(scopes: [["bom:radar:read"]])
 	"""
 	Seven days from WillyWeather; `location` is a WillyWeather id, Perth by default.
 	"""
-	bomForecast(location: String): [BomForecastDay!]!
+	bomForecast(location: String): [BomForecastDay!]! @requiresScopes(scopes: [["bom:forecast:read"]])
 }
 
 type Subscription {

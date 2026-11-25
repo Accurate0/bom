@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use async_graphql::{Error, Result, ID};
+use async_graphql::{Error, ID, Result};
 
 /// Relay ids are `<service>:<node>:<key>`; the router's node plugin turns `<service>` and
 /// `<node>` into the type name, so `<service>` is the subgraph prefix and `<node>` is the type
@@ -35,6 +35,12 @@ impl Ids {
             _ => Err(Error::new(format!("expected a {expected} id"))),
         }
     }
+
+    pub fn decode_row_id(&self, id: &ID, expected: &str) -> Result<i64> {
+        self.decode_as(id, expected)?
+            .parse()
+            .map_err(|_| invalid(id))
+    }
 }
 
 fn invalid(id: &ID) -> Error {
@@ -55,5 +61,9 @@ mod tests {
         assert!(IDS.decode_as(&id, "package").is_err());
         assert!(IDS.decode(&ID("waf:block:x".into())).is_err());
         assert!(IDS.decode(&ID("nope".into())).is_err());
+        assert_eq!(
+            IDS.decode_row_id(&IDS.encode("token", 4), "token").unwrap(),
+            4
+        );
     }
 }

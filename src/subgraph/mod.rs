@@ -1,11 +1,16 @@
 //! Copied from crates/subgraph in the k8s repo, which bom can't depend on.
+#![allow(dead_code)]
 
 pub mod auth;
+pub mod external;
 pub mod node;
+pub mod scopes;
 pub mod server;
 pub mod telemetry;
 
-pub use auth::{AuthConfig, Authenticator};
+pub use auth::{AuthConfig, Authenticator, Claims};
+pub use external::External;
+pub use scopes::Scopes;
 pub use server::router;
 pub use telemetry::Tracing;
 

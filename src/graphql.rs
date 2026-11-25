@@ -3,16 +3,16 @@ use std::time::Duration;
 
 use async_graphql::futures_util::Stream;
 use async_graphql::{
-    ComplexObject, Context, EmptyMutation, Error, Interface, Object, Result, Schema, SchemaBuilder,
-    SimpleObject, Subscription, ID,
+    ComplexObject, Context, EmptyMutation, Error, ID, Interface, Object, Result, Schema,
+    SchemaBuilder, SimpleObject, Subscription,
 };
 use chrono::{DateTime, Utc};
 
+use crate::BotContext;
 use crate::bom::{BOM, RADAR_CACHE_PATH, SATELLITE_CACHE_PATH};
-use crate::images::{frame_timestamps, parse_timestamp, Image};
+use crate::images::{Image, frame_timestamps, parse_timestamp};
 use crate::subgraph::node::Ids;
 use crate::subgraph::{AuthConfig, Authenticator};
-use crate::BotContext;
 
 const IDS: Ids = Ids::new("bom");
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
@@ -26,6 +26,7 @@ pub fn builder() -> SchemaBuilder<QueryRoot, EmptyMutation, SubscriptionRoot> {
         .enable_federation()
         .enable_subscription_in_federation()
         .extension(crate::subgraph::Tracing)
+        .extension(crate::subgraph::Scopes)
 }
 
 pub fn router(context: BotContext, public_url: String, auth: AuthConfig) -> axum::Router {
@@ -282,10 +283,12 @@ pub struct QueryRoot;
 
 #[Object(name = "Query")]
 impl QueryRoot {
+    #[graphql(requires_scopes = "bom:radar:read")]
     async fn bom_radar_locations(&self, ctx: &Context<'_>) -> Result<Vec<RadarLocation>> {
         RadarLocation::list(ctx).await
     }
 
+    #[graphql(requires_scopes = "bom:radar:read")]
     async fn bom_radar_location(
         &self,
         ctx: &Context<'_>,
@@ -294,11 +297,13 @@ impl QueryRoot {
         RadarLocation::load(ctx, &radar_id).await
     }
 
+    #[graphql(requires_scopes = "bom:radar:read")]
     async fn bom_satellites(&self, ctx: &Context<'_>) -> Result<Vec<Satellite>> {
         Satellite::list(ctx).await
     }
 
     /// Seven days from WillyWeather; `location` is a WillyWeather id, Perth by default.
+    #[graphql(requires_scopes = "bom:forecast:read")]
     async fn bom_forecast(
         &self,
         ctx: &Context<'_>,

@@ -1,16 +1,16 @@
-//! Async-graphql extension ported from spotify, as in crates/subgraph: a `graphql.<operation>` span per operation and a
+//! Async-graphql extension ported from spotify: a `graphql.<operation>` span per operation and a
 //! `graphql.<Type>.<field>` span per top-level field, nested under the request's HTTP span so the
 //! router's trace continues into each subgraph.
 
 use std::sync::Arc;
 
 use async_graphql::{
+    Response, ServerError, ServerResult, ValidationResult, Value, Variables,
     extensions::{
         Extension, ExtensionContext, ExtensionFactory, NextExecute, NextParseQuery, NextRequest,
         NextResolve, NextValidation, ResolveInfo,
     },
     parser::types::{ExecutableDocument, Selection},
-    Response, ServerError, ServerResult, ValidationResult, Value, Variables,
 };
 use tracing::{Instrument, Span};
 

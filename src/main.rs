@@ -4,10 +4,10 @@ use crate::{
 };
 use anyhow::Context;
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
     routing::get,
-    Json,
 };
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use chrono::{DateTime, Utc};
