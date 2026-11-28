@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod external;
 pub mod node;
+pub mod passport;
 pub mod scopes;
 pub mod server;
 pub mod telemetry;

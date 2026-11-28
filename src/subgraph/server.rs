@@ -8,7 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::Value;
 
-use crate::subgraph::auth::{AuthError, Authenticator, Principal, bearer};
+use crate::subgraph::auth::{AuthError, Authenticator, Principal};
+use crate::subgraph::passport;
 
 pub const GRAPHQL_PATH: &str = "/v1/graphql";
 pub const WEBSOCKET_PATH: &str = "/v1/graphql/ws";
@@ -27,9 +28,9 @@ impl<Q, M, S> Clone for Subgraph<Q, M, S> {
     }
 }
 
-/// Serves the subgraph on GRAPHQL_PATH and WEBSOCKET_PATH. Every operation needs a Kanidm token
-/// in an allowed group, or an external token matching a claim pattern; resolvers read the
-/// verified `Claims` (users) or `External` (machines) from the context.
+/// Serves the subgraph on GRAPHQL_PATH and WEBSOCKET_PATH. Every operation needs the router's
+/// passport for this subgraph; resolvers read the caller's `Claims` (users) or `External`
+/// (machines) from the context.
 pub fn router<Q, M, S>(schema: Schema<Q, M, S>, auth: Authenticator) -> Router
 where
     Q: ObjectType + 'static,
@@ -85,7 +86,7 @@ where
             GraphQLWebSocket::new(stream, subgraph.schema.clone(), protocol)
                 .on_connection_init(move |payload| async move {
                     let token = token_from_payload(&payload)
-                        .ok_or_else(|| async_graphql::Error::new("missing bearer token"))?;
+                        .ok_or_else(|| async_graphql::Error::new("missing graph passport"))?;
                     let principal = auth
                         .authenticate(&token)
                         .await
@@ -103,12 +104,14 @@ where
         .into_response()
 }
 
-/// The router forwards the client's headers as the connection_init payload.
+/// The router sends its fetch headers, the passport among them, as the connection_init payload.
 fn token_from_payload(payload: &Value) -> Option<String> {
-    ["Authorization", "authorization"]
+    payload
+        .as_object()?
         .iter()
-        .find_map(|key| payload.get(key).and_then(Value::as_str))
-        .and_then(bearer)
+        .find(|(key, _)| key.eq_ignore_ascii_case(passport::HEADER))
+        .and_then(|(_, value)| value.as_str())
+        .filter(|token| !token.is_empty())
         .map(str::to_owned)
 }
 
@@ -118,10 +121,14 @@ mod tests {
 
     #[test]
     fn payload_tokens() {
-        let payload = serde_json::json!({ "authorization": "Bearer abc" });
+        let payload = serde_json::json!({ "x-graph-passport": "abc", "authorization": "Bearer t" });
         assert_eq!(token_from_payload(&payload).as_deref(), Some("abc"));
         assert_eq!(
-            token_from_payload(&serde_json::json!({ "Authorization": "abc" })),
+            token_from_payload(&serde_json::json!({ "X-Graph-Passport": "abc" })).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            token_from_payload(&serde_json::json!({ "authorization": "Bearer t" })),
             None
         );
         assert_eq!(token_from_payload(&serde_json::json!({})), None);
@@ -143,14 +150,9 @@ mod tests {
         }
 
         let auth = Authenticator::new(crate::subgraph::AuthConfig {
-            providers: vec![
-                "https://idm.example.test/oauth2/openid/graph=graph"
-                    .parse()
-                    .unwrap(),
-            ],
-            groups: vec!["registry_users".to_owned()],
-            scopes: Vec::new(),
-            external: Vec::new(),
+            audience: "registry".to_owned(),
+            jwks: "http://router.invalid/.well-known/passport.jwks".to_owned(),
+            grants: Default::default(),
         });
         let app = router(Schema::new(Query, EmptyMutation, EmptySubscription), auth);
         let response = app
